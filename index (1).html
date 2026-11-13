@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Inventario">
+<title>Inventario Autotechno</title>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, Arial, sans-serif; margin: 0; background: #f2f4f7; color: #1d2433; }
+  header { background: #0b3d91; color: #fff; padding: 14px 16px; font-size: 18px; font-weight: 700; }
+  main { padding: 12px; max-width: 560px; margin: auto; padding-bottom: 80px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+  .tabs button { flex: 1; }
+  button { border: 0; border-radius: 10px; padding: 12px; font-size: 16px; font-weight: 600;
+           background: #e3e8f0; color: #1d2433; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  .prim, .act { background: #0b3d91; color: #fff; }
+  .ok { background: #1e8e3e; color: #fff; }
+  .mal { background: #c5221f; color: #fff; }
+  input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #c8cfdb; border-radius: 10px; }
+  .card { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 10px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .item { cursor: pointer; }
+  .bajo { border-left: 6px solid #c5221f; }
+  .cod { font-weight: 700; color: #0b3d91; }
+  .muted { color: #667085; font-size: 14px; }
+  .alerta { background: #fde8e8; color: #a50e0e; padding: 8px 10px; border-radius: 8px; font-weight: 600; margin: 8px 0; }
+  .stock { font-size: 36px; font-weight: 800; }
+  .fila { display: flex; gap: 8px; margin-top: 10px; }
+  .fila > * { flex: 1; }
+  .hidden { display: none; }
+  #camara { position: fixed; inset: 0; background: #000; z-index: 10; }
+  #camara.hidden { display: none; }
+  #video { width: 100%; height: 100%; object-fit: cover; }
+  .marco { position: absolute; top: 50%; left: 50%; width: 65vmin; height: 65vmin; transform: translate(-50%, -50%);
+           border: 4px solid #fff; border-radius: 16px; box-shadow: 0 0 0 9999px rgba(0,0,0,.45); }
+  .ayuda { position: absolute; top: 24px; left: 0; right: 0; text-align: center; color: #fff; font-size: 18px; font-weight: 600; }
+  .cancelar { position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%); padding: 14px 40px; background: #fff; }
+  #msg { position: fixed; left: 12px; right: 12px; bottom: 16px; padding: 12px; border-radius: 10px;
+         color: #fff; display: none; text-align: center; font-weight: 600; }
+</style>
+</head>
+<body>
+<header>Inventario Autotechno</header>
+<main>
+  <section id="login" class="hidden">
+    <div class="card">
+      <div style="font-size:18px;font-weight:700;margin-bottom:10px">Ingresar</div>
+      <input id="lNombre" placeholder="Tu nombre" style="margin-bottom:8px">
+      <input id="lPin" type="password" inputmode="numeric" placeholder="PIN">
+      <button class="prim" style="width:100%;margin-top:10px" onclick="ingresar()">Entrar</button>
+    </div>
+  </section>
+
+  <div id="app" class="hidden">
+  <div class="tabs">
+    <button id="tBuscar" class="act" onclick="verTab('buscar')">Buscar</button>
+    <button id="tBajo" onclick="verTab('bajo')">Stock bajo <span id="nBajo"></span></button>
+  </div>
+
+  <section id="buscar">
+    <button class="prim" style="width:100%;margin-bottom:6px;padding:16px;font-size:18px" onclick="abrirCamara()">📷 Escanear QR</button>
+    <div style="text-align:center;margin-bottom:10px">
+      <a href="#" class="muted" onclick="document.getElementById('foto').click();return false">¿No abre la cámara? Sacar foto del QR</a>
+    </div>
+    <input type="file" id="foto" accept="image/*" capture="environment" class="hidden">
+    <input id="q" placeholder="Buscar: código o nombre (ej: codo 8 mm 1/4)" oninput="buscar()">
+    <div id="ficha" style="margin-top:12px"></div>
+    <div id="lista" style="margin-top:12px"><p class="muted">Cargando productos…</p></div>
+  </section>
+
+  <section id="bajo" class="hidden"><div id="listaBajo"></div></section>
+  <div style="text-align:center;margin-top:20px">
+    <a href="#" class="muted" onclick="salir();return false">Cerrar sesión</a>
+  </div>
+  </div>
+</main>
+
+<div id="camara" class="hidden">
+  <video id="video" playsinline muted autoplay></video>
+  <div class="marco"></div>
+  <div class="ayuda">Apunta al código QR</div>
+  <button class="cancelar" onclick="cerrarCamara()">Cancelar</button>
+</div>
+<div id="msg"></div>
+
+<script>
+// ⚠️ PEGA AQUÍ la URL de tu Apps Script (la que termina en /exec), entre las comillas:
+const API_URL = 'https://script.google.com/macros/s/AKfycbwh-NDP9qxZ4cCabo2mQ2eA9e3SU0ldyTW1b2f-5_aQk3vxp3WTXOQMaTVx9D8vHdAn/exec';
+
+let productos = [];
+
+// ===== Conexión con la hoja (Apps Script) =====
+function sesion() {
+  try { return JSON.parse(localStorage.getItem('inv_sesion') || 'null'); } catch (e) { return null; }
+}
+async function api(datos) {
+  const s = sesion() || {};
+  const r = await fetch(API_URL, {
+    method: 'POST',
+    body: JSON.stringify(Object.assign({ pin: s.pin, usuario: s.nombre }, datos))
+  });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'Error');
+  return j;
+}
+async function ingresar() {
+  const nombre = document.getElementById('lNombre').value.trim();
+  const pin = document.getElementById('lPin').value.trim();
+  if (!nombre || !pin) { toast('Escribe tu nombre y el PIN', true); return; }
+  try { localStorage.setItem('inv_sesion', JSON.stringify({ nombre, pin })); } catch (e) {}
+  cargar();
+}
+function salir() {
+  try { localStorage.removeItem('inv_sesion'); } catch (e) {}
+  location.reload();
+}
+async function cargar() {
+  if (!sesion()) {
+    document.getElementById('login').classList.remove('hidden');
+    document.getElementById('app').classList.add('hidden');
+    return;
+  }
+  document.getElementById('login').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('lista').innerHTML = '<p class="muted">Cargando productos…</p>';
+  try {
+    const r = await api({ accion: 'productos' });
+    productos = r.productos;
+    actualizarBajo();
+    const ini = new URLSearchParams(location.search).get('code');
+    if (ini) abrir(ini); else buscar();
+  } catch (e) {
+    if (/PIN/.test(e.message)) {
+      try { localStorage.removeItem('inv_sesion'); } catch (x) {}
+      document.getElementById('app').classList.add('hidden');
+      document.getElementById('login').classList.remove('hidden');
+    }
+    toast('Error: ' + e.message, true);
+    document.getElementById('lista').innerHTML = '<p class="alerta">Error: ' + esc(e.message) + '</p>';
+  }
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function norm(s) {
+  return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+function toast(t, error) {
+  const m = document.getElementById('msg');
+  m.textContent = t;
+  m.style.background = error ? '#c5221f' : '#1e8e3e';
+  m.style.display = 'block';
+  clearTimeout(m._t);
+  m._t = setTimeout(() => m.style.display = 'none', 3000);
+}
+function esBajo(p) { return p.stock < p.minimo; }
+
+function itemHTML(p) {
+  return `<div class="card item ${esBajo(p) ? 'bajo' : ''}" onclick="abrir('${esc(p.codigo)}')">
+    <div class="cod">${esc(p.codigo)}</div>
+    <div>${esc(p.nombre)}</div>
+    <div class="muted">Stock: <b>${p.stock}</b> · Mín: ${p.minimo} · ${esc(p.categoria)}</div>
+  </div>`;
+}
+
+function buscar() {
+  document.getElementById('ficha').innerHTML = '';
+  const palabras = norm(document.getElementById('q').value).split(/\s+/).filter(Boolean);
+  const res = productos.filter(p => {
+    const txt = norm(p.codigo + ' ' + p.nombre + ' ' + p.categoria);
+    return palabras.every(w => txt.includes(w));
+  });
+  document.getElementById('lista').innerHTML =
+    res.length ? res.map(itemHTML).join('') : '<p class="muted">Sin resultados</p>';
+}
+
+function abrir(codigo) {
+  const p = productos.find(x => x.codigo.toUpperCase() === String(codigo).trim().toUpperCase());
+  verTab('buscar');
+  if (!p) { toast('Código no encontrado: ' + codigo, true); return; }
+  document.getElementById('lista').innerHTML = '';
+  document.getElementById('q').value = '';
+  const precio = p.precio ? '$' + p.precio.toLocaleString('es-CL') : '—';
+  document.getElementById('ficha').innerHTML = `
+    <div class="card ${esBajo(p) ? 'bajo' : ''}">
+      <div class="cod">${esc(p.codigo)}</div>
+      <div style="font-size:18px;font-weight:600;margin:4px 0">${esc(p.nombre)}</div>
+      <div class="muted">${esc(p.categoria)} · Ubicación: ${esc(p.ubicacion || '—')} · Precio: ${precio}</div>
+      ${esBajo(p) ? '<div class="alerta">⚠️ Stock bajo: reponer</div>' : ''}
+      <div class="muted" style="margin-top:8px">Stock actual</div>
+      <div class="stock">${p.stock}</div>
+      <div class="muted">Mínimo: ${p.minimo}</div>
+      <div class="fila"><input id="cant" type="number" min="1" inputmode="numeric" placeholder="Cantidad"></div>
+      <div class="fila"><input id="nota" placeholder="Nota (opcional): cliente, factura…"></div>
+      <div class="fila">
+        <button class="ok" onclick="mover('${esc(p.codigo)}','entrada', this)">＋ Entrada</button>
+        <button class="mal" onclick="mover('${esc(p.codigo)}','salida', this)">－ Salida</button>
+      </div>
+      <div class="fila"><button onclick="volver()">← Volver a la lista</button></div>
+    </div>`;
+}
+
+function volver() { document.getElementById('q').value = ''; buscar(); }
+
+function mover(codigo, tipo, btn) {
+  const cant = Number(document.getElementById('cant').value);
+  const nota = document.getElementById('nota').value;
+  if (!(cant > 0)) { toast('Escribe una cantidad mayor que 0', true); return; }
+  document.querySelectorAll('#ficha button').forEach(b => b.disabled = true);
+  api({ accion: 'movimiento', codigo, tipo, cantidad: cant, nota })
+    .then(r => {
+      const p = productos.find(x => x.codigo === codigo);
+      p.stock = r.stock;
+      actualizarBajo();
+      abrir(codigo);
+      toast((tipo === 'entrada' ? 'Entrada' : 'Salida') + ' registrada. Stock: ' + r.stock);
+    })
+    .catch(e => {
+      document.querySelectorAll('#ficha button').forEach(b => b.disabled = false);
+      toast(e.message, true);
+    });
+}
+
+function actualizarBajo() {
+  const bajos = productos.filter(esBajo);
+  document.getElementById('nBajo').textContent = bajos.length ? '(' + bajos.length + ')' : '';
+  document.getElementById('listaBajo').innerHTML =
+    bajos.length ? bajos.map(itemHTML).join('') : '<p class="muted">Todo en orden 👍</p>';
+}
+
+function verTab(t) {
+  document.getElementById('buscar').classList.toggle('hidden', t !== 'buscar');
+  document.getElementById('bajo').classList.toggle('hidden', t !== 'bajo');
+  document.getElementById('tBuscar').classList.toggle('act', t === 'buscar');
+  document.getElementById('tBajo').classList.toggle('act', t === 'bajo');
+}
+
+// El QR puede traer solo el código (RNPT-001) o un link con ?code=RNPT-001
+function extraerCodigo(texto) {
+  try { const u = new URL(texto); return u.searchParams.get('code') || texto.trim(); }
+  catch (e) { return texto.trim(); }
+}
+
+document.getElementById('foto').addEventListener('change', e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  toast('Leyendo QR…');
+  leerQR(f)
+    .then(texto => abrir(extraerCodigo(texto)))
+    .catch(() => toast('No se pudo leer el QR. Que el QR salga grande y derecho en la foto.', true));
+});
+
+// ===== Escáner en vivo con la cámara, dentro de la app =====
+let stream = null, escaneando = false, detector = null, ultimo = 0, vuelta = 0;
+const lienzo = document.createElement('canvas');
+const lctx = lienzo.getContext('2d', { willReadFrequently: true });
+
+async function abrirCamara() {
+  const v = document.getElementById('video');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+  } catch (e) {
+    toast('No se pudo abrir la cámara: permite el acceso o usa "Sacar foto del QR"', true);
+    return;
+  }
+  v.srcObject = stream;
+  document.getElementById('camara').classList.remove('hidden');
+  try { await v.play(); } catch (e) {}
+  if (!detector && 'BarcodeDetector' in window) {
+    try {
+      const f = await BarcodeDetector.getSupportedFormats();
+      if (f.includes('qr_code')) detector = new BarcodeDetector({ formats: ['qr_code'] });
+    } catch (e) {}
+  }
+  escaneando = true;
+  requestAnimationFrame(tick);
+}
+
+function cerrarCamara() {
+  escaneando = false;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  document.getElementById('camara').classList.add('hidden');
+}
+
+async function tick(t) {
+  if (!escaneando) return;
+  const v = document.getElementById('video');
+  if (t - ultimo > 120 && v.readyState >= 2 && v.videoWidth) {
+    ultimo = t;
+    let texto = null;
+    if (detector) {
+      try { const r = await detector.detect(v); if (r.length) texto = r[0].rawValue; } catch (e) {}
+    }
+    if (!texto && typeof jsQR === 'function') {
+      const w = v.videoWidth, h = v.videoHeight;
+      vuelta++;
+      let sx = 0, sy = 0, sw = w, sh = h, max = 640;
+      if (vuelta % 2) { // una vuelta mira solo el centro (donde está el marco), otra la imagen completa
+        const lado = Math.min(w, h) * 0.7;
+        sx = (w - lado) / 2; sy = (h - lado) / 2; sw = sh = lado; max = 500;
+      }
+      const s = Math.min(1, max / Math.max(sw, sh));
+      lienzo.width = Math.round(sw * s); lienzo.height = Math.round(sh * s);
+      lctx.drawImage(v, sx, sy, sw, sh, 0, 0, lienzo.width, lienzo.height);
+      const d = lctx.getImageData(0, 0, lienzo.width, lienzo.height);
+      const r = jsQR(d.data, lienzo.width, lienzo.height, { inversionAttempts: 'dontInvert' });
+      if (r && r.data) texto = r.data;
+    }
+    if (texto) {
+      cerrarCamara();
+      if (navigator.vibrate) navigator.vibrate(120);
+      abrir(extraerCodigo(texto));
+      return;
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+// Lee el QR de la foto: achica la imagen (las fotos del celular son muy grandes)
+// y prueba varios tamaños. Usa el lector nativo del teléfono si existe.
+function leerQR(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = async () => {
+      URL.revokeObjectURL(url);
+      if ('BarcodeDetector' in window) {
+        try {
+          const r = await new BarcodeDetector({ formats: ['qr_code'] }).detect(img);
+          if (r.length) return resolve(r[0].rawValue);
+        } catch (e) {}
+      }
+      for (const max of [1000, 700, 1400, 500]) {
+        const s = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * s);
+        c.height = Math.round(img.height * s);
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        const d = ctx.getImageData(0, 0, c.width, c.height);
+        const r = jsQR(d.data, c.width, c.height, { inversionAttempts: 'attemptBoth' });
+        if (r) return resolve(r.data);
+      }
+      reject(new Error('sin QR'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('imagen')); };
+    img.src = url;
+  });
+}
+
+cargar();
+</script>
+</body>
+</html>
